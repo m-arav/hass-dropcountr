@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 import logging
 
 from dropcountr import DropcountrClient
@@ -23,6 +23,16 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class ApiHealth:
+    """Diagnostic status for the Dropcountr API connection."""
+
+    ok: bool
+    last_success: datetime | None = None
+    last_error: str | None = None
+    meter_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -175,91 +185,24 @@ def _fetch_all(
                 if include and meter_id not in include:
                     continue
 
-                day_gallons, day_server_during = _fetch_usage(
-                    client, sc, "day", day_during
-                )
-                yesterday_gallons, yesterday_server_during = _fetch_usage(
-                    client, sc, "day", yesterday_during
-                )
-                week_gallons, week_server_during = _fetch_usage(
-                    client, sc, "week", week_during
-                )
-                month_gallons, month_server_during = _fetch_usage(
-                    client, sc, "month", month_during
-                )
+                try:
+                    snapshots[meter_id] = _fetch_meter_snapshot(
+                        client,
+                        sc,
+                        premise_name=premise_name,
+                        day_during=day_during,
+                        yesterday_during=yesterday_during,
+                        week_during=week_during,
+                        month_during=month_during,
+                        leaks_during=leaks_during,
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Dropcountr update failed for meter %s; skipping", meter_id
+                    )
 
-                day_cost, day_currency = _sum_cost(client, sc, "day", day_during)
-                week_cost, week_currency = _sum_cost(client, sc, "week", week_during)
-                month_cost, month_currency = _sum_cost(client, sc, "month", month_during)
-                cost_currency = day_currency or week_currency or month_currency
-
-                day_goal = _sum_goal_gallons(client, sc, "day", day_during)
-                week_goal = _sum_goal_gallons(client, sc, "week", week_during)
-                month_goal = _sum_goal_gallons(client, sc, "month", month_during)
-
-                open_leak: Leak | None = None
-                if sc.leaks:
-                    leak_series = client.leaks(sc.leaks.template, during=leaks_during)
-                    summary = _pick_open_leak(list(leak_series.members))
-                    if summary:
-                        try:
-                            open_leak = client.leak(summary.id)
-                        except Exception:
-                            _LOGGER.debug(
-                                "Failed to refresh leak detail %s",
-                                summary.id,
-                                exc_info=True,
-                            )
-                            open_leak = summary
-
-                volume = None
-                hourly = None
-                cost = None
-                currency = None
-                ignored = None
-                archived = None
-                if open_leak:
-                    ignored = open_leak.is_ignored
-                    archived = open_leak.is_archived
-                    if open_leak.est_total_volume:
-                        volume = open_leak.est_total_volume.value
-                    if open_leak.est_hourly_volume:
-                        hourly = open_leak.est_hourly_volume.value
-                    if open_leak.est_total_cost:
-                        cost = open_leak.est_total_cost.price
-                        currency = open_leak.est_total_cost.price_currency
-
-                snapshots[meter_id] = MeterSnapshot(
-                    meter_id=meter_id,
-                    service_connection_id=sc.id,
-                    name=sc.name or meter_id,
-                    premise_name=premise_name,
-                    service_type=sc.service_type,
-                    day_gallons=day_gallons,
-                    yesterday_gallons=yesterday_gallons,
-                    week_gallons=week_gallons,
-                    month_gallons=month_gallons,
-                    day_during=day_server_during,
-                    yesterday_during=yesterday_server_during,
-                    week_during=week_server_during,
-                    month_during=month_server_during,
-                    day_cost=day_cost,
-                    week_cost=week_cost,
-                    month_cost=month_cost,
-                    cost_currency=cost_currency,
-                    day_goal_gallons=day_goal,
-                    week_goal_gallons=week_goal,
-                    month_goal_gallons=month_goal,
-                    has_open_leak=open_leak is not None,
-                    open_leak_id=open_leak.id if open_leak else None,
-                    open_leak_started_at=open_leak.started_at if open_leak else None,
-                    open_leak_volume=volume,
-                    open_leak_hourly_volume=hourly,
-                    open_leak_cost=cost,
-                    open_leak_currency=currency,
-                    open_leak_ignored=ignored,
-                    open_leak_archived=archived,
-                )
+        if not snapshots:
+            raise UpdateFailed("No Dropcountr meters could be updated")
 
         return snapshots
     finally:
@@ -268,6 +211,103 @@ def _fetch_all(
         except Exception:
             _LOGGER.debug("Dropcountr logout failed", exc_info=True)
         client.close()
+
+
+def _fetch_meter_snapshot(
+    client: DropcountrClient,
+    sc: ServiceConnection,
+    *,
+    premise_name: str,
+    day_during: str,
+    yesterday_during: str,
+    week_during: str,
+    month_during: str,
+    leaks_during: str,
+) -> MeterSnapshot:
+    """Fetch one meter snapshot."""
+    meter_id = sc.meter_id or sc.id
+
+    day_gallons, day_server_during = _fetch_usage(client, sc, "day", day_during)
+    yesterday_gallons, yesterday_server_during = _fetch_usage(
+        client, sc, "day", yesterday_during
+    )
+    week_gallons, week_server_during = _fetch_usage(client, sc, "week", week_during)
+    month_gallons, month_server_during = _fetch_usage(
+        client, sc, "month", month_during
+    )
+
+    day_cost, day_currency = _sum_cost(client, sc, "day", day_during)
+    week_cost, week_currency = _sum_cost(client, sc, "week", week_during)
+    month_cost, month_currency = _sum_cost(client, sc, "month", month_during)
+    cost_currency = day_currency or week_currency or month_currency
+
+    day_goal = _sum_goal_gallons(client, sc, "day", day_during)
+    week_goal = _sum_goal_gallons(client, sc, "week", week_during)
+    month_goal = _sum_goal_gallons(client, sc, "month", month_during)
+
+    open_leak: Leak | None = None
+    if sc.leaks:
+        leak_series = client.leaks(sc.leaks.template, during=leaks_during)
+        summary = _pick_open_leak(list(leak_series.members))
+        if summary:
+            try:
+                open_leak = client.leak(summary.id)
+            except Exception:
+                _LOGGER.debug(
+                    "Failed to refresh leak detail %s",
+                    summary.id,
+                    exc_info=True,
+                )
+                open_leak = summary
+
+    volume = None
+    hourly = None
+    cost = None
+    currency = None
+    ignored = None
+    archived = None
+    if open_leak:
+        ignored = open_leak.is_ignored
+        archived = open_leak.is_archived
+        if open_leak.est_total_volume:
+            volume = open_leak.est_total_volume.value
+        if open_leak.est_hourly_volume:
+            hourly = open_leak.est_hourly_volume.value
+        if open_leak.est_total_cost:
+            cost = open_leak.est_total_cost.price
+            currency = open_leak.est_total_cost.price_currency
+
+    return MeterSnapshot(
+        meter_id=meter_id,
+        service_connection_id=sc.id,
+        name=sc.name or meter_id,
+        premise_name=premise_name,
+        service_type=sc.service_type,
+        day_gallons=day_gallons,
+        yesterday_gallons=yesterday_gallons,
+        week_gallons=week_gallons,
+        month_gallons=month_gallons,
+        day_during=day_server_during,
+        yesterday_during=yesterday_server_during,
+        week_during=week_server_during,
+        month_during=month_server_during,
+        day_cost=day_cost,
+        week_cost=week_cost,
+        month_cost=month_cost,
+        cost_currency=cost_currency,
+        day_goal_gallons=day_goal,
+        week_goal_gallons=week_goal,
+        month_goal_gallons=month_goal,
+        has_open_leak=open_leak is not None,
+        open_leak_id=open_leak.id if open_leak else None,
+        open_leak_started_at=open_leak.started_at if open_leak else None,
+        open_leak_volume=volume,
+        open_leak_hourly_volume=hourly,
+        open_leak_cost=cost,
+        open_leak_currency=currency,
+        open_leak_ignored=ignored,
+        open_leak_archived=archived,
+    )
 
 
 def _scan_interval(entry: ConfigEntry) -> timedelta:
@@ -287,17 +327,38 @@ class DropcountrDataUpdateCoordinator(DataUpdateCoordinator[dict[str, MeterSnaps
             update_interval=_scan_interval(entry),
         )
         self.entry = entry
+        self.api_health = ApiHealth(ok=False)
 
     async def _async_update_data(self) -> dict[str, MeterSnapshot]:
         selected = self.entry.options.get(CONF_METER_IDS) or []
         try:
-            return await self.hass.async_add_executor_job(
+            data = await self.hass.async_add_executor_job(
                 _fetch_all,
                 self.entry.data[CONF_EMAIL],
                 self.entry.data[CONF_PASSWORD],
                 list(selected),
             )
-        except ConfigEntryAuthFailed:
+        except ConfigEntryAuthFailed as err:
+            self.api_health = ApiHealth(
+                ok=False,
+                last_success=self.api_health.last_success,
+                last_error="Authentication failed",
+                meter_count=0,
+            )
             raise
         except Exception as err:
+            self.api_health = ApiHealth(
+                ok=False,
+                last_success=self.api_health.last_success,
+                last_error=str(err),
+                meter_count=len(self.data) if self.data else 0,
+            )
             raise UpdateFailed(f"Error communicating with Dropcountr: {err}") from err
+
+        self.api_health = ApiHealth(
+            ok=True,
+            last_success=datetime.now(timezone.utc),
+            last_error=None,
+            meter_count=len(data),
+        )
+        return data

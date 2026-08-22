@@ -153,8 +153,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.open_leak_volume,
-        available_fn=lambda data: data.has_open_leak,
+        value_fn=lambda data: data.open_leak_volume if data.has_open_leak else 0.0,
     ),
     DropcountrSensorEntityDescription(
         key="leak_est_hourly_volume",
@@ -164,8 +163,9 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.open_leak_hourly_volume,
-        available_fn=lambda data: data.has_open_leak,
+        value_fn=lambda data: (
+            data.open_leak_hourly_volume if data.has_open_leak else 0.0
+        ),
     ),
     DropcountrSensorEntityDescription(
         key="leak_est_cost",
@@ -174,8 +174,8 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.MONETARY,
         state_class=SensorStateClass.TOTAL,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda data: data.open_leak_cost,
-        available_fn=lambda data: data.has_open_leak and data.open_leak_cost is not None,
+        value_fn=lambda data: data.open_leak_cost if data.has_open_leak else 0.0,
+        available_fn=lambda data: True,
     ),
 )
 

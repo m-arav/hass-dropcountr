@@ -61,6 +61,7 @@
       "leak_est_cost": { "name": "Leak estimated cost" }
     },
     "binary_sensor": {
+      "api_health": { "name": "API health" },
       "open_leak": { "name": "Open leak" }
     }
   }

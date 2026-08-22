@@ -11,6 +11,7 @@ Per meter (service connection):
 | Today / yesterday / week / month **usage** | Gallons for those periods. Attributes include the server-aligned `during`, `during_start`, and `during_end`. |
 | Day / week / month **cost** | Estimated cost for those periods |
 | Day / week / month **goal** | Goal gallons for those periods |
+| **API health** | Diagnostic connectivity sensor for the account (last success, last error, meter count) |
 | **Open leak** | On when an unresolved leak appears in the last-7-days leaks API |
 | Leak estimated **volume / hourly / cost** | Populated while an open leak is active |
 
