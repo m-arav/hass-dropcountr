@@ -1,0 +1,37 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dropcountr",
+        "description": "Sign in with your Dropcountr account.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Dropcountr.",
+      "invalid_auth": "Invalid email or password.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This Dropcountr account is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "week_usage": {
+        "name": "Week usage"
+      },
+      "month_usage": {
+        "name": "Month usage"
+      }
+    },
+    "binary_sensor": {
+      "open_leak": {
+        "name": "Open leak"
+      }
+    }
+  }
+}

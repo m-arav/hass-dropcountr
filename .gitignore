@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Home Assistant
+.storage/
+.cloud/
+.HA_VERSION
+
+# Environments
+.venv/
+.env
+.idea/
+.vscode/
+*.swp
+.DS_Store
