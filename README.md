@@ -2,20 +2,26 @@
 
 Home Assistant custom integration for [Dropcountr](https://dropcountr.com) water meters.
 
-## Features (v1)
+## Features
 
 Per meter (service connection):
 
-- **Week usage** — gallons in the current calendar week
-- **Month usage** — gallons in the current calendar month
-- **Open leak** — binary sensor from the leaks API (last 7 days, unresolved / open-ended leaks)
+| Entity | Description |
+|--------|-------------|
+| Today / yesterday / week / month **usage** | Gallons for those periods. Attributes include the server-aligned `during`, `during_start`, and `during_end`. |
+| Day / week / month **cost** | Estimated cost for those periods |
+| Day / week / month **goal** | Goal gallons for those periods |
+| **Open leak** | On when an unresolved leak appears in the last-7-days leaks API |
+| Leak estimated **volume / hourly / cost** | Populated while an open leak is active |
 
 Does **not** use the usage series `is_leaking` flag.
+
+Icons use Material Design Icons (`mdi:water`, `mdi:pipe-leak`, `mdi:currency-usd`, etc.).
 
 ## Requirements
 
 - Home Assistant 2024.8+
-- Published package [`dropcountr-py==0.2.0`](https://pypi.org/project/dropcountr-py/) (installed automatically by HA)
+- [`dropcountr-py==0.2.0`](https://pypi.org/project/dropcountr-py/) (installed automatically by HA)
 
 ## Install
 
@@ -28,23 +34,26 @@ Does **not** use the usage series `is_leaking` flag.
 
 ### Manual
 
-Copy `custom_components/dropcountr` into your HA `config/custom_components/` directory, restart, then add the integration.
+```bash
+mkdir -p "$HOME/homeassistant/config/custom_components"
+git clone https://github.com/m-arav/hass-dropcountr.git /tmp/hass-dropcountr
+cp -r /tmp/hass-dropcountr/custom_components/dropcountr \
+  "$HOME/homeassistant/config/custom_components/"
+docker restart homeassistant
+```
+
+Then add the integration in the UI.
 
 ## Configuration
 
-Enter your Dropcountr email and password. One config entry polls all premises and meters on the account every hour.
+Enter your Dropcountr email and password.
 
-## Entities
+After setup, open the integration → **Configure** to set:
 
-Each meter becomes a device named `{premise} {meter}` (e.g. `2030 3rd St apt 8 Potable`) with:
+- **Poll interval** (minutes, default 15)
+- **Meters** to include (multi-select). Leave empty for all premises/meters.
 
-| Entity | Description |
-|--------|-------------|
-| Week usage | Calendar week gallons (`period=week`) |
-| Month usage | Calendar month gallons (`period=month`) |
-| Open leak | On when an open-ended leak (`resolved_at` empty) is returned for the last 7 days |
-
-Open leak attributes include leak id, started_at, estimated volume, and estimated cost when present.
+If your password changes, HA will prompt to **reauthenticate**.
 
 ## License
 

@@ -8,6 +8,13 @@
           "email": "Email",
           "password": "Password"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Dropcountr",
+        "description": "Password for `{email}` is no longer valid. Enter a new password.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -16,22 +23,45 @@
       "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "This Dropcountr account is already configured."
+      "already_configured": "This Dropcountr account is already configured.",
+      "reauth_successful": "Reauthentication successful."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dropcountr options",
+        "description": "Choose poll interval and which meters to include. Leave meters empty to include all.\n\n{meter_hint}",
+        "data": {
+          "scan_interval": "Poll interval",
+          "meter_ids": "Meters"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Dropcountr.",
+      "invalid_auth": "Invalid email or password.",
+      "unknown": "Unexpected error."
     }
   },
   "entity": {
     "sensor": {
-      "week_usage": {
-        "name": "Week usage"
-      },
-      "month_usage": {
-        "name": "Month usage"
-      }
+      "day_usage": { "name": "Today usage" },
+      "yesterday_usage": { "name": "Yesterday usage" },
+      "week_usage": { "name": "Week usage" },
+      "month_usage": { "name": "Month usage" },
+      "day_cost": { "name": "Day cost" },
+      "week_cost": { "name": "Week cost" },
+      "month_cost": { "name": "Month cost" },
+      "day_goal": { "name": "Day goal" },
+      "week_goal": { "name": "Week goal" },
+      "month_goal": { "name": "Month goal" },
+      "leak_est_volume": { "name": "Leak estimated volume" },
+      "leak_est_hourly_volume": { "name": "Leak estimated hourly volume" },
+      "leak_est_cost": { "name": "Leak estimated cost" }
     },
     "binary_sensor": {
-      "open_leak": {
-        "name": "Open leak"
-      }
+      "open_leak": { "name": "Open leak" }
     }
   }
 }
