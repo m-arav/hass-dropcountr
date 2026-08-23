@@ -336,21 +336,56 @@ def _hourly_cost_from_members(members: list) -> list[HourlyCostPoint]:
     return points
 
 
-def _fetch_hourly_cost_points(
+def _during_dates(during: str) -> tuple[date, date] | None:
+    if "/" not in during:
+        return None
+    start_s, end_s = during.split("/", 1)
+    try:
+        return date.fromisoformat(start_s[:10]), date.fromisoformat(end_s[:10])
+    except ValueError:
+        return None
+
+
+def _fetch_hourly_cost_window(
     client: DropcountrClient, sc: ServiceConnection, during: str
 ) -> list[HourlyCostPoint]:
-    if not sc.cost_series:
-        return []
     try:
         series = client.cost(sc, period="hour", during=during)
     except Exception:
-        _LOGGER.debug(
-            "Dropcountr hourly cost failed for %s",
+        _LOGGER.warning(
+            "Dropcountr hourly cost failed for %s during %s",
             sc.meter_id or sc.id,
+            during,
             exc_info=True,
         )
         return []
     return _hourly_cost_from_members(list(series.members))
+
+
+def _fetch_hourly_cost_points(
+    client: DropcountrClient, sc: ServiceConnection, during: str
+) -> list[HourlyCostPoint]:
+    """Hourly cost; long windows are fetched in 5-day chunks (API times out at 30d)."""
+    if not sc.cost_series:
+        return []
+    bounds = _during_dates(during)
+    if bounds is None:
+        return _fetch_hourly_cost_window(client, sc, during)
+    start, end = bounds
+    if (end - start).days <= 7:
+        return _fetch_hourly_cost_window(client, sc, during)
+    points: list[HourlyCostPoint] = []
+    cursor = start
+    while cursor < end:
+        nxt = min(cursor + timedelta(days=5), end)
+        points.extend(
+            _fetch_hourly_cost_window(
+                client, sc, f"{cursor.isoformat()}/{nxt.isoformat()}"
+            )
+        )
+        cursor = nxt
+    by_start = {point.start: point for point in points}
+    return sorted(by_start.values(), key=lambda item: item.start)
 
 
 def fetch_hourly_backfill_for_meter(

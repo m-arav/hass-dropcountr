@@ -180,7 +180,8 @@ async def _import_series(
         return None
     metadata = metadata_fn(entity_id, name)
     if last_sum is None:
-        return await _import_amounts(hass, entity_id, metadata, backfill or [], 0.0)
+        first = backfill if backfill else recent
+        return await _import_amounts(hass, entity_id, metadata, first, 0.0)
     if not recent:
         return last_sum
     base_sum = await _recorder_sum_before(hass, entity_id, recent[0][0])
