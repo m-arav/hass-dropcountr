@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfVolume
+from homeassistant.const import PERCENTAGE, EntityCategory, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -24,10 +24,13 @@ from .const import (
     ATTR_DURING,
     ATTR_DURING_END,
     ATTR_DURING_START,
+    ATTR_LAG,
     ATTR_METER_ID,
     ATTR_MONTH_COST,
     ATTR_MONTH_GOAL,
     ATTR_PREMISE_NAME,
+    ATTR_PREMISE_TIMEZONE,
+    ATTR_READ_FREQUENCY,
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
     ATTR_WEEK_GOAL,
@@ -41,6 +44,12 @@ def _during_bounds(during: str | None) -> tuple[str | None, str | None]:
         return None, None
     start, end = during.split("/", 1)
     return start, end
+
+
+def _as_percent(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value * 100, 1)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -177,6 +186,36 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         value_fn=lambda data: data.open_leak_cost if data.has_open_leak else 0.0,
         available_fn=lambda data: True,
     ),
+    DropcountrSensorEntityDescription(
+        key="completeness_7d",
+        translation_key="completeness_7d",
+        icon="mdi:chart-donut",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: _as_percent(data.completeness_7d),
+        available_fn=lambda data: data.completeness_7d is not None,
+    ),
+    DropcountrSensorEntityDescription(
+        key="completeness_30d",
+        translation_key="completeness_30d",
+        icon="mdi:chart-donut",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: _as_percent(data.completeness_30d),
+        available_fn=lambda data: data.completeness_30d is not None,
+    ),
+    DropcountrSensorEntityDescription(
+        key="completeness_90d",
+        translation_key="completeness_90d",
+        icon="mdi:chart-donut",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: _as_percent(data.completeness_90d),
+        available_fn=lambda data: data.completeness_90d is not None,
+    ),
 )
 
 
@@ -274,9 +313,13 @@ class DropcountrSensor(
             return {}
         attrs: dict[str, float | str | None] = {
             ATTR_PREMISE_NAME: data.premise_name,
+            ATTR_PREMISE_TIMEZONE: data.premise_timezone,
             ATTR_METER_ID: data.meter_id,
             ATTR_SERVICE_TYPE: data.service_type,
         }
+        if self.entity_description.key.startswith("completeness_"):
+            attrs[ATTR_READ_FREQUENCY] = data.read_frequency
+            attrs[ATTR_LAG] = data.lag
         if self.entity_description.key.endswith("_usage"):
             attrs.update(
                 {

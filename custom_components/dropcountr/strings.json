@@ -58,7 +58,10 @@
       "month_goal": { "name": "Month goal" },
       "leak_est_volume": { "name": "Leak estimated volume" },
       "leak_est_hourly_volume": { "name": "Leak estimated hourly volume" },
-      "leak_est_cost": { "name": "Leak estimated cost" }
+      "leak_est_cost": { "name": "Leak estimated cost" },
+      "completeness_7d": { "name": "7-day completeness" },
+      "completeness_30d": { "name": "30-day completeness" },
+      "completeness_90d": { "name": "90-day completeness" }
     },
     "binary_sensor": {
       "api_health": { "name": "API health" },

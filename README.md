@@ -8,9 +8,10 @@ Per meter (service connection):
 
 | Entity | Description |
 |--------|-------------|
-| Today / yesterday / week / month **usage** | Gallons for those periods. Attributes include the server-aligned `during`, `during_start`, and `during_end`. |
+| Today / yesterday / week / month **usage** | Gallons for those periods in the **premise timezone**. Attributes include the server-aligned `during`, `during_start`, and `during_end` (local wall clock with the real offset, not the API's false UTC `Z`). |
 | Day / week / month **cost** | Estimated cost for those periods |
 | Day / week / month **goal** | Goal gallons for those periods |
+| **7 / 30 / 90-day completeness** | Diagnostic meter-read coverage from `usage_stats` (`read_frequency` and `lag` are attributes) |
 | **API health** | Diagnostic connectivity sensor for the account (last success, last error, meter count) |
 | **Open leak** | On when an unresolved leak appears in the last-7-days leaks API |
 | Leak estimated **volume / hourly / cost** | Populated while an open leak is active |
@@ -22,7 +23,7 @@ Icons use Material Design Icons (`mdi:water`, `mdi:pipe-leak`, `mdi:currency-usd
 ## Requirements
 
 - Home Assistant 2024.8+
-- [`dropcountr-py==0.2.0`](https://pypi.org/project/dropcountr-py/) (installed automatically by HA)
+- [`dropcountr-py==0.3.0`](https://pypi.org/project/dropcountr-py/) (installed automatically by HA)
 
 ## Install
 

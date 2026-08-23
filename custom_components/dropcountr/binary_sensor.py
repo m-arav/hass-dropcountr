@@ -30,6 +30,7 @@ from .const import (
     ATTR_MONTH_COST,
     ATTR_MONTH_GOAL,
     ATTR_PREMISE_NAME,
+    ATTR_PREMISE_TIMEZONE,
     ATTR_SCAN_INTERVAL,
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
@@ -172,6 +173,7 @@ class DropcountrOpenLeakBinarySensor(
 
         attrs: dict[str, float | str | bool | None] = {
             ATTR_PREMISE_NAME: data.premise_name,
+            ATTR_PREMISE_TIMEZONE: data.premise_timezone,
             ATTR_METER_ID: data.meter_id,
             ATTR_SERVICE_TYPE: data.service_type,
         }

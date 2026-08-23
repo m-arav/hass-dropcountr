@@ -16,8 +16,11 @@ MAX_SCAN_INTERVAL = 1440
 UPDATE_INTERVAL = timedelta(minutes=DEFAULT_SCAN_INTERVAL)
 
 ATTR_PREMISE_NAME = "premise_name"
+ATTR_PREMISE_TIMEZONE = "premise_timezone"
 ATTR_METER_ID = "meter_id"
 ATTR_SERVICE_TYPE = "service_type"
+ATTR_READ_FREQUENCY = "read_frequency"
+ATTR_LAG = "lag"
 ATTR_LEAK_ID = "leak_id"
 ATTR_LEAK_STARTED_AT = "leak_started_at"
 ATTR_LEAK_VOLUME = "leak_est_volume_gallons"

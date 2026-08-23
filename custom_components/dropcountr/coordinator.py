@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dropcountr import DropcountrClient
-from dropcountr.models import Leak, ServiceConnection
+from dropcountr.models import Leak, ServiceConnection, UsageStats
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -43,7 +44,13 @@ class MeterSnapshot:
     service_connection_id: str
     name: str
     premise_name: str
+    premise_timezone: str | None
     service_type: str | None
+    read_frequency: str | None
+    lag: str | None
+    completeness_7d: float | None
+    completeness_30d: float | None
+    completeness_90d: float | None
     day_gallons: float
     yesterday_gallons: float
     week_gallons: float
@@ -68,6 +75,16 @@ class MeterSnapshot:
     open_leak_currency: str | None = None
     open_leak_ignored: bool | None = None
     open_leak_archived: bool | None = None
+
+
+def _local_today(tz_name: str | None) -> date:
+    """Calendar date at the premise, not the Home Assistant host."""
+    if tz_name:
+        try:
+            return datetime.now(ZoneInfo(tz_name)).date()
+        except (ZoneInfoNotFoundError, ValueError):
+            _LOGGER.debug("Unknown premise timezone %s", tz_name)
+    return date.today()
 
 
 def _monday_of(day: date) -> date:
@@ -118,7 +135,7 @@ def _fetch_usage(
     """Return total gallons and the server-aligned during interval."""
     if not sc.usage_series:
         return 0.0, None
-    series = client.usage(sc.usage_series.template, period=period, during=during)
+    series = client.usage(sc, period=period, during=during)
     total = sum(point.total_gallons for point in series.members)
     return total, _server_during_from_members(list(series.members))
 
@@ -128,7 +145,7 @@ def _sum_cost(
 ) -> tuple[float | None, str | None]:
     if not sc.cost_series:
         return None, None
-    series = client.cost(sc.cost_series.template, period=period, during=during)
+    series = client.cost(sc, period=period, during=during)
     if not series.members:
         return 0.0, None
     total = sum(point.price for point in series.members)
@@ -141,7 +158,7 @@ def _sum_goal_gallons(
 ) -> float | None:
     if not sc.goal_series:
         return None
-    series = client.goal(sc.goal_series.template, period=period, during=during)
+    series = client.goal(sc, period=period, during=during)
     if not series.members:
         return 0.0
     return sum(point.gallons for point in series.members)
@@ -157,15 +174,8 @@ def _pick_open_leak(leaks: list[Leak]) -> Leak | None:
 def _fetch_all(
     email: str, password: str, selected_meter_ids: list[str] | None
 ) -> dict[str, MeterSnapshot]:
-    """Fetch usage/cost/goal and open leak status for selected meters."""
+    """Fetch usage/cost/goal, stats, and open leak status for selected meters."""
     client = DropcountrClient(email=email, password=password)
-    today = date.today()
-    yesterday = today - timedelta(days=1)
-    day_during = _exclusive_day_during(today)
-    yesterday_during = _exclusive_day_during(yesterday)
-    week_during = _exclusive_week_during(today)
-    month_during = _exclusive_month_during(today)
-    leaks_during = _exclusive_last_7_days(today)
     include = set(selected_meter_ids or [])
 
     try:
@@ -190,11 +200,6 @@ def _fetch_all(
                         client,
                         sc,
                         premise_name=premise_name,
-                        day_during=day_during,
-                        yesterday_during=yesterday_during,
-                        week_during=week_during,
-                        month_during=month_during,
-                        leaks_during=leaks_during,
                     )
                 except Exception:
                     _LOGGER.exception(
@@ -213,19 +218,37 @@ def _fetch_all(
         client.close()
 
 
+def _fetch_usage_stats(client: DropcountrClient, sc: ServiceConnection) -> UsageStats | None:
+    if not sc.usage_stats:
+        return None
+    try:
+        return client.usage_stats(sc)
+    except Exception:
+        _LOGGER.debug(
+            "Dropcountr usage_stats failed for %s",
+            sc.meter_id or sc.id,
+            exc_info=True,
+        )
+        return None
+
+
 def _fetch_meter_snapshot(
     client: DropcountrClient,
     sc: ServiceConnection,
     *,
     premise_name: str,
-    day_during: str,
-    yesterday_during: str,
-    week_during: str,
-    month_during: str,
-    leaks_during: str,
 ) -> MeterSnapshot:
     """Fetch one meter snapshot."""
     meter_id = sc.meter_id or sc.id
+    today = _local_today(sc.timezone)
+    yesterday = today - timedelta(days=1)
+    day_during = _exclusive_day_during(today)
+    yesterday_during = _exclusive_day_during(yesterday)
+    week_during = _exclusive_week_during(today)
+    month_during = _exclusive_month_during(today)
+    leaks_during = _exclusive_last_7_days(today)
+
+    stats = _fetch_usage_stats(client, sc)
 
     day_gallons, day_server_during = _fetch_usage(client, sc, "day", day_during)
     yesterday_gallons, yesterday_server_during = _fetch_usage(
@@ -247,11 +270,11 @@ def _fetch_meter_snapshot(
 
     open_leak: Leak | None = None
     if sc.leaks:
-        leak_series = client.leaks(sc.leaks.template, during=leaks_during)
+        leak_series = client.leaks(sc, during=leaks_during)
         summary = _pick_open_leak(list(leak_series.members))
         if summary:
             try:
-                open_leak = client.leak(summary.id)
+                open_leak = client.leak(summary.id, timezone=sc.timezone)
             except Exception:
                 _LOGGER.debug(
                     "Failed to refresh leak detail %s",
@@ -282,7 +305,13 @@ def _fetch_meter_snapshot(
         service_connection_id=sc.id,
         name=sc.name or meter_id,
         premise_name=premise_name,
+        premise_timezone=sc.timezone,
         service_type=sc.service_type,
+        read_frequency=stats.read_frequency if stats else None,
+        lag=stats.lag if stats else None,
+        completeness_7d=stats.completeness_7d if stats else None,
+        completeness_30d=stats.completeness_30d if stats else None,
+        completeness_90d=stats.completeness_90d if stats else None,
         day_gallons=day_gallons,
         yesterday_gallons=yesterday_gallons,
         week_gallons=week_gallons,
