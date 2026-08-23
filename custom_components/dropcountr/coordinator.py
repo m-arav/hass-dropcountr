@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import logging
+import re
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dropcountr import DropcountrClient
-from dropcountr.models import Leak, ServiceConnection, UsageStats
+from dropcountr.models import BILLING_PERIOD_FEATURE, Leak, Premise, ServiceConnection, UsageStats
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
@@ -75,6 +76,19 @@ class MeterSnapshot:
     open_leak_currency: str | None = None
     open_leak_ignored: bool | None = None
     open_leak_archived: bool | None = None
+    hour_gallons: float | None = None
+    hour_irrigation_gallons: float | None = None
+    hour_during: str | None = None
+    day_irrigation_gallons: float = 0.0
+    day_irrigation_events: float = 0.0
+    week_irrigation_gallons: float = 0.0
+    month_irrigation_gallons: float = 0.0
+    billing_gallons: float | None = None
+    billing_irrigation_gallons: float | None = None
+    billing_irrigation_events: float | None = None
+    billing_during: str | None = None
+    billing_cost: float | None = None
+    billing_goal_gallons: float | None = None
 
 
 def _local_today(tz_name: str | None) -> date:
@@ -116,6 +130,120 @@ def _exclusive_last_7_days(today: date) -> str:
     return f"{start.isoformat()}/{end.isoformat()}"
 
 
+def _exclusive_billing_query(today: date) -> str:
+    """Current calendar month; the API returns the billing bucket that overlaps."""
+    start = today.replace(day=1)
+    return f"{start.isoformat()}/{(today + timedelta(days=1)).isoformat()}"
+
+
+def _parse_instant(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _interval_start(during: str | None) -> datetime | None:
+    if not during:
+        return None
+    if "/" in during:
+        during = during.split("/", 1)[0]
+    return _parse_instant(during)
+
+
+def _interval_start_date(during: str | None) -> date | None:
+    start = _interval_start(during)
+    return start.date() if start else None
+
+
+def _interval_end_date(during: str | None) -> date | None:
+    if not during or "/" not in during:
+        return None
+    end = _parse_instant(during.split("/", 1)[1])
+    return end.date() if end else None
+
+
+@dataclass(frozen=True)
+class UsageTotals:
+    gallons: float = 0.0
+    irrigation_gallons: float = 0.0
+    irrigation_events: float = 0.0
+    during: str | None = None
+
+
+def _totals_from_members(members: list) -> UsageTotals:
+    reported = [point for point in members if point.total_gallons is not None]
+    return UsageTotals(
+        gallons=sum(point.total_gallons or 0.0 for point in reported),
+        irrigation_gallons=sum(point.irrigation_gallons or 0.0 for point in reported),
+        irrigation_events=sum(point.irrigation_events or 0.0 for point in reported),
+        during=_server_during_from_members(reported or members),
+    )
+
+
+def _totals_from_point(point) -> UsageTotals:
+    return UsageTotals(
+        gallons=point.total_gallons,
+        irrigation_gallons=point.irrigation_gallons,
+        irrigation_events=point.irrigation_events,
+        during=point.during,
+    )
+
+
+_ISO_DURATION = re.compile(
+    r"^P(?:(?P<years>\d+)Y)?(?:(?P<months>\d+)M)?(?:(?P<days>\d+)D)?"
+    r"(?:T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+(?:\.\d+)?)S)?)?$"
+)
+
+
+def _iso_duration_hours(value: str | None) -> float | None:
+    """Parse an ISO-8601 duration (``lag``) into hours."""
+    if not value:
+        return None
+    match = _ISO_DURATION.fullmatch(value)
+    if not match:
+        return None
+    years = float(match.group("years") or 0)
+    months = float(match.group("months") or 0)
+    days = float(match.group("days") or 0)
+    hours = float(match.group("hours") or 0)
+    minutes = float(match.group("minutes") or 0)
+    seconds = float(match.group("seconds") or 0)
+    return (
+        years * 365.25 * 24
+        + months * 30.4375 * 24
+        + days * 24
+        + hours
+        + minutes / 60
+        + seconds / 3600
+    )
+
+
+def _latest_reported_hour(members: list):
+    """Latest hourly bucket whose gallons are not null (vendor has reported)."""
+    dated: list[tuple[datetime, object]] = []
+    for point in members:
+        if point.total_gallons is None:
+            continue
+        start = _interval_start(point.during)
+        if start is None:
+            continue
+        dated.append((start, point))
+    if not dated:
+        return None
+    dated.sort(key=lambda item: item[0])
+    return dated[-1][1]
+
+
+def _current_billing_member(members: list, today: date):
+    for point in members:
+        start = _interval_start_date(point.during)
+        end = _interval_end_date(point.during)
+        if start and end and start <= today < end:
+            return point
+    return members[-1] if members else None
+
+
 def _server_during_from_members(members: list) -> str | None:
     """Use the API's aligned interval(s), not the client request window."""
     if not members:
@@ -131,13 +259,88 @@ def _server_during_from_members(members: list) -> str | None:
 
 def _fetch_usage(
     client: DropcountrClient, sc: ServiceConnection, period: str, during: str
-) -> tuple[float, str | None]:
-    """Return total gallons and the server-aligned during interval."""
+) -> UsageTotals:
+    """Return usage totals and the server-aligned during interval."""
     if not sc.usage_series:
-        return 0.0, None
+        return UsageTotals()
     series = client.usage(sc, period=period, during=during)
-    total = sum(point.total_gallons for point in series.members)
-    return total, _server_during_from_members(list(series.members))
+    return _totals_from_members(list(series.members))
+
+
+def _fetch_hour_usage(
+    client: DropcountrClient, sc: ServiceConnection, during: str
+) -> UsageTotals | None:
+    if not sc.usage_series:
+        return None
+    series = client.usage(sc, period="hour", during=during)
+    point = _latest_reported_hour(list(series.members))
+    if point is None:
+        return None
+    return _totals_from_point(point)
+
+
+def _supports_billing(sc: ServiceConnection) -> bool:
+    return BILLING_PERIOD_FEATURE in (sc.features or [])
+
+
+def _fetch_billing_usage(
+    client: DropcountrClient, sc: ServiceConnection, during: str, today: date
+) -> UsageTotals | None:
+    if not sc.usage_series or not _supports_billing(sc):
+        return None
+    try:
+        series = client.usage(sc, period="billing", during=during)
+    except Exception:
+        _LOGGER.debug(
+            "Dropcountr billing usage failed for %s",
+            sc.meter_id or sc.id,
+            exc_info=True,
+        )
+        return None
+    point = _current_billing_member(list(series.members), today)
+    if point is None:
+        return None
+    return _totals_from_point(point)
+
+
+def _fetch_billing_cost(
+    client: DropcountrClient, sc: ServiceConnection, during: str, today: date
+) -> tuple[float | None, str | None]:
+    if not sc.cost_series or not _supports_billing(sc):
+        return None, None
+    try:
+        series = client.cost(sc, period="billing", during=during)
+    except Exception:
+        _LOGGER.debug(
+            "Dropcountr billing cost failed for %s",
+            sc.meter_id or sc.id,
+            exc_info=True,
+        )
+        return None, None
+    point = _current_billing_member(list(series.members), today)
+    if point is None:
+        return None, None
+    return point.price, point.price_currency
+
+
+def _fetch_billing_goal(
+    client: DropcountrClient, sc: ServiceConnection, during: str, today: date
+) -> float | None:
+    if not sc.goal_series or not _supports_billing(sc):
+        return None
+    try:
+        series = client.goal(sc, period="billing", during=during)
+    except Exception:
+        _LOGGER.debug(
+            "Dropcountr billing goal failed for %s",
+            sc.meter_id or sc.id,
+            exc_info=True,
+        )
+        return None
+    point = _current_billing_member(list(series.members), today)
+    if point is None:
+        return None
+    return point.gallons
 
 
 def _sum_cost(
@@ -188,7 +391,6 @@ def _fetch_all(
 
         for premise_ref in user.premises:
             premise = client.premise(premise_ref.id)
-            premise_name = premise.name or premise.id
 
             for sc in premise.service_connections:
                 meter_id = sc.meter_id or sc.id
@@ -199,7 +401,7 @@ def _fetch_all(
                     snapshots[meter_id] = _fetch_meter_snapshot(
                         client,
                         sc,
-                        premise_name=premise_name,
+                        premise=premise,
                     )
                 except Exception:
                     _LOGGER.exception(
@@ -236,10 +438,11 @@ def _fetch_meter_snapshot(
     client: DropcountrClient,
     sc: ServiceConnection,
     *,
-    premise_name: str,
+    premise: Premise,
 ) -> MeterSnapshot:
     """Fetch one meter snapshot."""
     meter_id = sc.meter_id or sc.id
+    premise_name = premise.name or premise.id
     today = _local_today(sc.timezone)
     yesterday = today - timedelta(days=1)
     day_during = _exclusive_day_during(today)
@@ -247,26 +450,31 @@ def _fetch_meter_snapshot(
     week_during = _exclusive_week_during(today)
     month_during = _exclusive_month_during(today)
     leaks_during = _exclusive_last_7_days(today)
+    billing_during = _exclusive_billing_query(today)
 
     stats = _fetch_usage_stats(client, sc)
 
-    day_gallons, day_server_during = _fetch_usage(client, sc, "day", day_during)
-    yesterday_gallons, yesterday_server_during = _fetch_usage(
-        client, sc, "day", yesterday_during
-    )
-    week_gallons, week_server_during = _fetch_usage(client, sc, "week", week_during)
-    month_gallons, month_server_during = _fetch_usage(
-        client, sc, "month", month_during
-    )
+    day = _fetch_usage(client, sc, "day", day_during)
+    yesterday_usage = _fetch_usage(client, sc, "day", yesterday_during)
+    week = _fetch_usage(client, sc, "week", week_during)
+    month = _fetch_usage(client, sc, "month", month_during)
+    hour = _fetch_hour_usage(client, sc, day_during)
+    billing = _fetch_billing_usage(client, sc, billing_during, today)
 
     day_cost, day_currency = _sum_cost(client, sc, "day", day_during)
     week_cost, week_currency = _sum_cost(client, sc, "week", week_during)
     month_cost, month_currency = _sum_cost(client, sc, "month", month_during)
-    cost_currency = day_currency or week_currency or month_currency
+    billing_cost, billing_currency = _fetch_billing_cost(
+        client, sc, billing_during, today
+    )
+    cost_currency = (
+        day_currency or week_currency or month_currency or billing_currency
+    )
 
     day_goal = _sum_goal_gallons(client, sc, "day", day_during)
     week_goal = _sum_goal_gallons(client, sc, "week", week_during)
     month_goal = _sum_goal_gallons(client, sc, "month", month_during)
+    billing_goal = _fetch_billing_goal(client, sc, billing_during, today)
 
     open_leak: Leak | None = None
     if sc.leaks:
@@ -312,14 +520,14 @@ def _fetch_meter_snapshot(
         completeness_7d=stats.completeness_7d if stats else None,
         completeness_30d=stats.completeness_30d if stats else None,
         completeness_90d=stats.completeness_90d if stats else None,
-        day_gallons=day_gallons,
-        yesterday_gallons=yesterday_gallons,
-        week_gallons=week_gallons,
-        month_gallons=month_gallons,
-        day_during=day_server_during,
-        yesterday_during=yesterday_server_during,
-        week_during=week_server_during,
-        month_during=month_server_during,
+        day_gallons=day.gallons,
+        yesterday_gallons=yesterday_usage.gallons,
+        week_gallons=week.gallons,
+        month_gallons=month.gallons,
+        day_during=day.during,
+        yesterday_during=yesterday_usage.during,
+        week_during=week.during,
+        month_during=month.during,
         day_cost=day_cost,
         week_cost=week_cost,
         month_cost=month_cost,
@@ -336,6 +544,19 @@ def _fetch_meter_snapshot(
         open_leak_currency=currency,
         open_leak_ignored=ignored,
         open_leak_archived=archived,
+        hour_gallons=hour.gallons if hour else None,
+        hour_irrigation_gallons=hour.irrigation_gallons if hour else None,
+        hour_during=hour.during if hour else None,
+        day_irrigation_gallons=day.irrigation_gallons,
+        day_irrigation_events=day.irrigation_events,
+        week_irrigation_gallons=week.irrigation_gallons,
+        month_irrigation_gallons=month.irrigation_gallons,
+        billing_gallons=billing.gallons if billing else None,
+        billing_irrigation_gallons=billing.irrigation_gallons if billing else None,
+        billing_irrigation_events=billing.irrigation_events if billing else None,
+        billing_during=billing.during if billing else None,
+        billing_cost=billing_cost,
+        billing_goal_gallons=billing_goal,
     )
 
 
