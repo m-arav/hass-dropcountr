@@ -2,6 +2,8 @@
 
 Home Assistant custom integration for [Dropcountr](https://dropcountr.com) water meters.
 
+This is a community project and is **not** an official Dropcountr product or integration. Dropcountr does not endorse, support, or maintain it.
+
 ## Features
 
 Per meter (service connection):
@@ -62,7 +64,7 @@ If your password changes, HA will prompt to **reauthenticate**.
 
 ## Brand icon
 
-Made-up gauge/wave brand art ships in `custom_components/dropcountr/brand/` (not official Dropcountr branding). Needs Home Assistant **2026.3+**. After updating, restart HA and hard-refresh the browser.
+Made-up droplet-and-meter brand art ships in `custom_components/dropcountr/brand/` (not official Dropcountr branding). Needs Home Assistant **2026.3+**. After updating, restart HA and hard-refresh the browser.
 
 ## License
 
