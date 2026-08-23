@@ -22,6 +22,7 @@ from .const import (
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    STATISTICS_BACKFILL_DAYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,16 @@ class ApiHealth:
     last_success: datetime | None = None
     last_error: str | None = None
     meter_count: int = 0
+
+
+@dataclass(frozen=True)
+class HourlyPoint:
+    """One reported hourly usage bucket (null gallons omitted)."""
+
+    start: datetime
+    gallons: float
+    irrigation_gallons: float | None
+    during: str | None
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,8 @@ class MeterSnapshot:
     billing_during: str | None = None
     billing_cost: float | None = None
     billing_goal_gallons: float | None = None
+    hourly_points: tuple[HourlyPoint, ...] = ()
+    lifetime_gallons: float | None = None
 
 
 def _local_today(tz_name: str | None) -> date:
@@ -127,6 +140,18 @@ def _exclusive_last_7_days(today: date) -> str:
     return f"{start.isoformat()}/{end.isoformat()}"
 
 
+def _exclusive_yesterday_and_today(today: date) -> str:
+    yesterday = today - timedelta(days=1)
+    return f"{yesterday.isoformat()}/{(today + timedelta(days=1)).isoformat()}"
+
+
+def exclusive_last_days(today: date, days: int = STATISTICS_BACKFILL_DAYS) -> str:
+    """Exclusive-ended interval covering the last ``days`` calendar days plus today."""
+    start = today - timedelta(days=days)
+    end = today + timedelta(days=1)
+    return f"{start.isoformat()}/{end.isoformat()}"
+
+
 def _exclusive_billing_query(today: date) -> str:
     """Current calendar month; the API returns the billing bucket that overlaps."""
     start = today.replace(day=1)
@@ -138,6 +163,10 @@ def _parse_instant(value: str) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _hour_start(value: datetime) -> datetime:
+    return value.replace(minute=0, second=0, microsecond=0)
 
 
 def _interval_start(during: str | None) -> datetime | None:
@@ -216,22 +245,6 @@ def _iso_duration_hours(value: str | None) -> float | None:
     )
 
 
-def _latest_reported_hour(members: list):
-    """Latest hourly bucket whose gallons are not null (vendor has reported)."""
-    dated: list[tuple[datetime, object]] = []
-    for point in members:
-        if point.total_gallons is None:
-            continue
-        start = _interval_start(point.during)
-        if start is None:
-            continue
-        dated.append((start, point))
-    if not dated:
-        return None
-    dated.sort(key=lambda item: item[0])
-    return dated[-1][1]
-
-
 def _current_billing_member(members: list, today: date):
     for point in members:
         start = _interval_start_date(point.during)
@@ -264,16 +277,57 @@ def _fetch_usage(
     return _totals_from_members(list(series.members))
 
 
-def _fetch_hour_usage(
+def _hourly_points_from_members(members: list) -> list[HourlyPoint]:
+    points: list[HourlyPoint] = []
+    for point in members:
+        if point.total_gallons is None:
+            continue
+        start = _interval_start(point.during)
+        if start is None or start.tzinfo is None:
+            continue
+        points.append(
+            HourlyPoint(
+                start=_hour_start(start),
+                gallons=point.total_gallons,
+                irrigation_gallons=point.irrigation_gallons,
+                during=point.during,
+            )
+        )
+    points.sort(key=lambda item: item.start)
+    return points
+
+
+def _fetch_hourly_points(
     client: DropcountrClient, sc: ServiceConnection, during: str
-) -> UsageTotals | None:
+) -> list[HourlyPoint]:
     if not sc.usage_series:
-        return None
+        return []
     series = client.usage(sc, period="hour", during=during)
-    point = _latest_reported_hour(list(series.members))
-    if point is None:
-        return None
-    return _totals_from_point(point)
+    return _hourly_points_from_members(list(series.members))
+
+
+def fetch_hourly_points_for_meter(
+    email: str, password: str, meter_id: str, during: str
+) -> list[HourlyPoint]:
+    """Login and fetch reported hourly buckets for one meter."""
+    client = DropcountrClient(email=email, password=password)
+    try:
+        login = client.login()
+        if login.status_code >= 400:
+            raise ConfigEntryAuthFailed("Invalid Dropcountr credentials")
+        user = client.me()
+        for premise_ref in user.premises:
+            premise = client.premise(premise_ref.id)
+            for sc in premise.service_connections:
+                if (sc.meter_id or sc.id) == meter_id:
+                    return _fetch_hourly_points(client, sc, during)
+        return []
+    finally:
+        try:
+            client.logout()
+        except Exception:
+            _LOGGER.debug("Dropcountr logout failed", exc_info=True)
+        client.close()
 
 
 def _supports_billing(sc: ServiceConnection) -> bool:
@@ -452,7 +506,10 @@ def _fetch_meter_snapshot(
 
     day = _fetch_usage(client, sc, "day", day_during)
     week = _fetch_usage(client, sc, "week", week_during)
-    hour = _fetch_hour_usage(client, sc, day_during)
+    hourly_points = _fetch_hourly_points(
+        client, sc, _exclusive_yesterday_and_today(today)
+    )
+    latest_hour = hourly_points[-1] if hourly_points else None
 
     month = UsageTotals()
     month_cost, month_currency = None, None
@@ -542,9 +599,12 @@ def _fetch_meter_snapshot(
         open_leak_currency=currency,
         open_leak_ignored=ignored,
         open_leak_archived=archived,
-        hour_gallons=hour.gallons if hour else None,
-        hour_irrigation_gallons=hour.irrigation_gallons if hour else None,
-        hour_during=hour.during if hour else None,
+        hour_gallons=latest_hour.gallons if latest_hour else None,
+        hour_irrigation_gallons=(
+            latest_hour.irrigation_gallons if latest_hour else None
+        ),
+        hour_during=latest_hour.during if latest_hour else None,
+        hourly_points=tuple(hourly_points),
         day_irrigation_gallons=day.irrigation_gallons,
         day_irrigation_events=day.irrigation_events,
         week_irrigation_gallons=week.irrigation_gallons,
@@ -609,4 +669,7 @@ class DropcountrDataUpdateCoordinator(DataUpdateCoordinator[dict[str, MeterSnaps
             last_error=None,
             meter_count=len(data),
         )
-        return data
+        from .statistics import async_import_hourly_statistics
+
+        imported = await async_import_hourly_statistics(self.hass, self, data)
+        return imported if imported is not None else data

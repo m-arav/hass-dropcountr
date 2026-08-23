@@ -36,6 +36,7 @@ from .const import (
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
     DOMAIN,
+    TOTAL_USAGE_KEY,
 )
 from .coordinator import (
     DropcountrDataUpdateCoordinator,
@@ -97,6 +98,17 @@ class DropcountrSensorEntityDescription(SensorEntityDescription):
 
 
 SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
+    DropcountrSensorEntityDescription(
+        key=TOTAL_USAGE_KEY,
+        translation_key=TOTAL_USAGE_KEY,
+        icon="mdi:counter",
+        native_unit_of_measurement=UnitOfVolume.GALLONS,
+        device_class=SensorDeviceClass.WATER,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=1,
+        value_fn=lambda data: data.lifetime_gallons,
+        available_fn=lambda data: data.lifetime_gallons is not None,
+    ),
     DropcountrSensorEntityDescription(
         key="day_usage",
         translation_key="day_usage",
