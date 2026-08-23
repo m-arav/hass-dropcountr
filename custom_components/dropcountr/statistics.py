@@ -70,7 +70,7 @@ def _statistic_metadata(entity_id: str, name: str | None) -> StatisticMetaData:
         "has_mean": False,
         "has_sum": True,
         "name": name,
-        "source": "sensor",
+        "source": "recorder",
         "statistic_id": entity_id,
         "unit_class": "volume",
         "unit_of_measurement": UnitOfVolume.GALLONS,

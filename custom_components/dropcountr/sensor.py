@@ -143,7 +143,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         icon="mdi:clock-outline",
         native_unit_of_measurement=UnitOfVolume.GALLONS,
         device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.MEASUREMENT,
+        state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.hour_gallons,
         available_fn=lambda data: data.hour_gallons is not None,
     ),
@@ -306,7 +306,6 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         translation_key="leak_est_hourly_volume",
         icon="mdi:water-pump",
         native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.MEASUREMENT,
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: (
