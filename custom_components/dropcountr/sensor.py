@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -20,7 +21,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     ATTR_COST_CURRENCY,
     ATTR_DAY_COST,
-    ATTR_DAY_GOAL,
     ATTR_DURING,
     ATTR_DURING_END,
     ATTR_DURING_START,
@@ -35,7 +35,6 @@ from .const import (
     ATTR_READ_FREQUENCY,
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
-    ATTR_WEEK_GOAL,
     DOMAIN,
 )
 from .coordinator import (
@@ -70,24 +69,31 @@ def _share_percent(part: float | None, total: float | None) -> float | None:
     return round(((part or 0.0) / total) * 100, 1)
 
 
-def _goal_remaining(used: float | None, goal: float | None) -> float | None:
-    if goal is None:
-        return None
-    return round(goal - (used or 0.0), 1)
-
-
 def _goal_percent(used: float | None, goal: float | None) -> float | None:
     if goal is None or goal <= 0:
         return None
     return round(((used or 0.0) / goal) * 100, 1)
 
 
+def _leak_started_at(data: MeterSnapshot) -> datetime | None:
+    if not data.has_open_leak or not data.open_leak_started_at:
+        return None
+    try:
+        started = datetime.fromisoformat(data.open_leak_started_at)
+    except ValueError:
+        return None
+    if started.tzinfo is None:
+        return None
+    return started
+
+
 @dataclass(frozen=True, kw_only=True)
 class DropcountrSensorEntityDescription(SensorEntityDescription):
     """Describes a Dropcountr sensor."""
 
-    value_fn: Callable[[MeterSnapshot], float | None]
+    value_fn: Callable[[MeterSnapshot], float | datetime | None]
     available_fn: Callable[[MeterSnapshot], bool] = lambda _data: True
+    include_fn: Callable[[MeterSnapshot], bool] = lambda _data: True
 
 
 SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
@@ -99,15 +105,6 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.day_gallons,
-    ),
-    DropcountrSensorEntityDescription(
-        key="yesterday_usage",
-        translation_key="yesterday_usage",
-        icon="mdi:water-minus",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: data.yesterday_gallons,
     ),
     DropcountrSensorEntityDescription(
         key="week_usage",
@@ -126,6 +123,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.month_gallons,
+        include_fn=lambda data: not data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="hour_usage",
@@ -138,37 +136,6 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         available_fn=lambda data: data.hour_gallons is not None,
     ),
     DropcountrSensorEntityDescription(
-        key="day_irrigation",
-        translation_key="day_irrigation",
-        icon="mdi:sprinkler",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: data.day_irrigation_gallons,
-    ),
-    DropcountrSensorEntityDescription(
-        key="day_indoor",
-        translation_key="day_indoor",
-        icon="mdi:home-outline",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: _indoor_gallons(
-            data.day_gallons, data.day_irrigation_gallons
-        ),
-    ),
-    DropcountrSensorEntityDescription(
-        key="day_irrigation_percent",
-        translation_key="day_irrigation_percent",
-        icon="mdi:percent",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _share_percent(
-            data.day_irrigation_gallons, data.day_gallons
-        ),
-        available_fn=lambda data: data.day_gallons > 0,
-    ),
-    DropcountrSensorEntityDescription(
         key="billing_usage",
         translation_key="billing_usage",
         icon="mdi:calendar-month",
@@ -177,16 +144,19 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.billing_gallons,
         available_fn=lambda data: data.billing_gallons is not None,
+        include_fn=lambda data: data.has_billing,
     ),
     DropcountrSensorEntityDescription(
-        key="billing_irrigation",
-        translation_key="billing_irrigation",
-        icon="mdi:sprinkler",
+        key="month_indoor",
+        translation_key="month_indoor",
+        icon="mdi:home-outline",
         native_unit_of_measurement=UnitOfVolume.GALLONS,
         device_class=SensorDeviceClass.WATER,
         state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: data.billing_irrigation_gallons,
-        available_fn=lambda data: data.billing_irrigation_gallons is not None,
+        value_fn=lambda data: _indoor_gallons(
+            data.month_gallons, data.month_irrigation_gallons
+        ),
+        include_fn=lambda data: not data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="billing_indoor",
@@ -199,6 +169,31 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
             data.billing_gallons, data.billing_irrigation_gallons
         ),
         available_fn=lambda data: data.billing_gallons is not None,
+        include_fn=lambda data: data.has_billing,
+    ),
+    DropcountrSensorEntityDescription(
+        key="month_irrigation_percent",
+        translation_key="month_irrigation_percent",
+        icon="mdi:percent",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: _share_percent(
+            data.month_irrigation_gallons, data.month_gallons
+        ),
+        available_fn=lambda data: data.month_gallons > 0,
+        include_fn=lambda data: not data.has_billing,
+    ),
+    DropcountrSensorEntityDescription(
+        key="billing_irrigation_percent",
+        translation_key="billing_irrigation_percent",
+        icon="mdi:percent",
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda data: _share_percent(
+            data.billing_irrigation_gallons, data.billing_gallons
+        ),
+        available_fn=lambda data: (data.billing_gallons or 0) > 0,
+        include_fn=lambda data: data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="day_cost",
@@ -226,26 +221,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.month_cost,
         available_fn=lambda data: data.month_cost is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="day_goal",
-        translation_key="day_goal",
-        icon="mdi:bullseye-arrow",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: data.day_goal_gallons,
-        available_fn=lambda data: data.day_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="week_goal",
-        translation_key="week_goal",
-        icon="mdi:target",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.TOTAL,
-        value_fn=lambda data: data.week_goal_gallons,
-        available_fn=lambda data: data.week_goal_gallons is not None,
+        include_fn=lambda data: not data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="month_goal",
@@ -256,6 +232,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.month_goal_gallons,
         available_fn=lambda data: data.month_goal_gallons is not None,
+        include_fn=lambda data: not data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="billing_cost",
@@ -265,6 +242,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.billing_cost,
         available_fn=lambda data: data.billing_cost is not None,
+        include_fn=lambda data: data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="billing_goal",
@@ -275,56 +253,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         state_class=SensorStateClass.TOTAL,
         value_fn=lambda data: data.billing_goal_gallons,
         available_fn=lambda data: data.billing_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="day_goal_remaining",
-        translation_key="day_goal_remaining",
-        icon="mdi:cup-outline",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_remaining(data.day_gallons, data.day_goal_gallons),
-        available_fn=lambda data: data.day_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="day_goal_percent",
-        translation_key="day_goal_percent",
-        icon="mdi:gauge",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_percent(data.day_gallons, data.day_goal_gallons),
-        available_fn=lambda data: data.day_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="week_goal_remaining",
-        translation_key="week_goal_remaining",
-        icon="mdi:cup-outline",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_remaining(data.week_gallons, data.week_goal_gallons),
-        available_fn=lambda data: data.week_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="week_goal_percent",
-        translation_key="week_goal_percent",
-        icon="mdi:gauge",
-        native_unit_of_measurement=PERCENTAGE,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_percent(data.week_gallons, data.week_goal_gallons),
-        available_fn=lambda data: data.week_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="month_goal_remaining",
-        translation_key="month_goal_remaining",
-        icon="mdi:cup-outline",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_remaining(
-            data.month_gallons, data.month_goal_gallons
-        ),
-        available_fn=lambda data: data.month_goal_gallons is not None,
+        include_fn=lambda data: data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="month_goal_percent",
@@ -336,18 +265,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
             data.month_gallons, data.month_goal_gallons
         ),
         available_fn=lambda data: data.month_goal_gallons is not None,
-    ),
-    DropcountrSensorEntityDescription(
-        key="billing_goal_remaining",
-        translation_key="billing_goal_remaining",
-        icon="mdi:cup-outline",
-        native_unit_of_measurement=UnitOfVolume.GALLONS,
-        device_class=SensorDeviceClass.WATER,
-        state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda data: _goal_remaining(
-            data.billing_gallons, data.billing_goal_gallons
-        ),
-        available_fn=lambda data: data.billing_goal_gallons is not None,
+        include_fn=lambda data: not data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="billing_goal_percent",
@@ -359,6 +277,7 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
             data.billing_gallons, data.billing_goal_gallons
         ),
         available_fn=lambda data: data.billing_goal_gallons is not None,
+        include_fn=lambda data: data.has_billing,
     ),
     DropcountrSensorEntityDescription(
         key="leak_est_volume",
@@ -391,6 +310,15 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data.open_leak_cost if data.has_open_leak else 0.0,
         available_fn=lambda data: True,
+    ),
+    DropcountrSensorEntityDescription(
+        key="leak_started_at",
+        translation_key="leak_started_at",
+        icon="mdi:clock-start",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_leak_started_at,
+        available_fn=lambda data: _leak_started_at(data) is not None,
     ),
     DropcountrSensorEntityDescription(
         key="read_lag",
@@ -465,9 +393,10 @@ async def async_setup_entry(
     """Set up Dropcountr sensors from a config entry."""
     coordinator: DropcountrDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[DropcountrSensor] = []
-    for meter_id in coordinator.data:
+    for meter_id, snapshot in coordinator.data.items():
         for description in SENSORS:
-            entities.append(DropcountrSensor(coordinator, meter_id, description))
+            if description.include_fn(snapshot):
+                entities.append(DropcountrSensor(coordinator, meter_id, description))
     async_add_entities(entities)
 
 
@@ -503,7 +432,7 @@ class DropcountrSensor(
         return self.entity_description.available_fn(data)
 
     @property
-    def native_value(self) -> float | None:
+    def native_value(self) -> float | datetime | None:
         """Return the sensor value."""
         data = self.coordinator.data.get(self._meter_id)
         if data is None:
@@ -541,14 +470,11 @@ class DropcountrSensor(
             attrs[ATTR_LAG] = data.lag
         if self.entity_description.key in {
             "day_usage",
-            "yesterday_usage",
             "week_usage",
             "month_usage",
         }:
             attrs.update(
                 {
-                    ATTR_DAY_GOAL: data.day_goal_gallons,
-                    ATTR_WEEK_GOAL: data.week_goal_gallons,
                     ATTR_MONTH_GOAL: data.month_goal_gallons,
                     ATTR_DAY_COST: data.day_cost,
                     ATTR_WEEK_COST: data.week_cost,
@@ -558,17 +484,16 @@ class DropcountrSensor(
             )
         during_map = {
             "day_usage": data.day_during,
-            "yesterday_usage": data.yesterday_during,
             "week_usage": data.week_during,
             "month_usage": data.month_during,
             "hour_usage": data.hour_during,
             "billing_usage": data.billing_during,
-            "billing_irrigation": data.billing_during,
             "billing_indoor": data.billing_during,
+            "billing_irrigation_percent": data.billing_during,
             "billing_cost": data.billing_during,
             "billing_goal": data.billing_during,
-            "day_irrigation": data.day_during,
-            "day_indoor": data.day_during,
+            "month_indoor": data.month_during,
+            "month_irrigation_percent": data.month_during,
         }
         if self.entity_description.key in during_map:
             during = during_map[self.entity_description.key]

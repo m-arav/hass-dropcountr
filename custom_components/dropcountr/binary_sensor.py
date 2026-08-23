@@ -14,7 +14,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     ATTR_DAY_COST,
-    ATTR_DAY_GOAL,
     ATTR_LAST_ERROR,
     ATTR_LAST_SUCCESS,
     ATTR_LEAK_ARCHIVED,
@@ -34,7 +33,6 @@ from .const import (
     ATTR_SCAN_INTERVAL,
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
-    ATTR_WEEK_GOAL,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -193,8 +191,6 @@ class DropcountrOpenLeakBinarySensor(
                 ATTR_DAY_COST: data.day_cost,
                 ATTR_WEEK_COST: data.week_cost,
                 ATTR_MONTH_COST: data.month_cost,
-                ATTR_DAY_GOAL: data.day_goal_gallons,
-                ATTR_WEEK_GOAL: data.week_goal_gallons,
                 ATTR_MONTH_GOAL: data.month_goal_gallons,
             }
         )

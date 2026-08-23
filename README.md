@@ -10,18 +10,18 @@ Per meter (service connection):
 
 | Entity | Description |
 |--------|-------------|
-| Today / yesterday / week / month **usage** | Gallons for those periods in the **premise timezone**. Attributes include the server-aligned `during`, `during_start`, and `during_end` (local wall clock with the real offset, not the API's false UTC `Z`). |
+| Today / week **usage** | Gallons in the **premise timezone**. Attributes include the server-aligned `during`, `during_start`, and `during_end` (local wall clock with the real offset, not the API's false UTC `Z`). |
+| Month **or** billing **usage** | Billing cycle when the meter has `billing_period`; otherwise calendar month. Never both. |
 | **Last reported hour** | Latest hourly bucket today whose gallons are not `null`. Query is start-of-day/end-of-day in the premise timezone. |
-| Today **irrigation / indoor / irrigation share** | Outdoor vs indoor split for today. Week/month usage sensors expose the same split as attributes. |
-| **Billing period** usage / irrigation / indoor / cost / goal | Current utility billing cycle (`billing` period). Unavailable if the meter lacks the `billing_period` feature. |
-| Day / week / month **cost** | Estimated cost for those periods |
-| Day / week / month **goal** | Goal gallons for those periods |
-| Goal **remaining / % used** | Today, week, month, and billing cycle. Remaining can go negative when over the goal. |
+| Month **or** billing **indoor / irrigation share** | Indoor gallons and outdoor share for the same window as month-or-billing usage. Irrigation gallons stay as attributes on usage sensors. |
+| Billing **cost / goal** | Only when the meter has `billing_period`. |
+| Day / week **cost** | Estimated cost for those periods. Month cost is created only when billing is missing. |
+| Month **or** billing **goal / % used** | Goal gallons and percent used for the same window as month-or-billing usage. |
 | **Read lag** | Vendor reporting delay from `usage_stats.lag` (ISO-8601 duration, shown in hours) |
 | **7 / 30 / 90-day completeness** | Diagnostic meter-read coverage from `usage_stats` (`read_frequency` and raw `lag` are attributes) |
 | **API health** | Diagnostic connectivity sensor for the account (last success, last error, meter count) |
 | **Open leak** | On when an unresolved leak appears in the last-7-days leaks API |
-| Leak estimated **volume / hourly / cost** | Populated while an open leak is active |
+| Leak estimated **volume / hourly / cost** and **started** | Diagnostics while an open leak is active. `Leak started` is a timestamp. |
 
 Icons use Material Design Icons (`mdi:water`, `mdi:pipe-leak`, `mdi:currency-usd`, etc.).
 

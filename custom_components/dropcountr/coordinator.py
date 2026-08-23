@@ -53,20 +53,17 @@ class MeterSnapshot:
     completeness_30d: float | None
     completeness_90d: float | None
     day_gallons: float
-    yesterday_gallons: float
     week_gallons: float
     month_gallons: float
     day_during: str | None
-    yesterday_during: str | None
     week_during: str | None
     month_during: str | None
     day_cost: float | None
     week_cost: float | None
     month_cost: float | None
     cost_currency: str | None
-    day_goal_gallons: float | None
-    week_goal_gallons: float | None
     month_goal_gallons: float | None
+    has_billing: bool
     has_open_leak: bool
     open_leak_id: str | None = None
     open_leak_started_at: str | None = None
@@ -444,37 +441,41 @@ def _fetch_meter_snapshot(
     meter_id = sc.meter_id or sc.id
     premise_name = premise.name or premise.id
     today = _local_today(sc.timezone)
-    yesterday = today - timedelta(days=1)
     day_during = _exclusive_day_during(today)
-    yesterday_during = _exclusive_day_during(yesterday)
     week_during = _exclusive_week_during(today)
     month_during = _exclusive_month_during(today)
     leaks_during = _exclusive_last_7_days(today)
     billing_during = _exclusive_billing_query(today)
+    has_billing = _supports_billing(sc)
 
     stats = _fetch_usage_stats(client, sc)
 
     day = _fetch_usage(client, sc, "day", day_during)
-    yesterday_usage = _fetch_usage(client, sc, "day", yesterday_during)
     week = _fetch_usage(client, sc, "week", week_during)
-    month = _fetch_usage(client, sc, "month", month_during)
     hour = _fetch_hour_usage(client, sc, day_during)
-    billing = _fetch_billing_usage(client, sc, billing_during, today)
+
+    month = UsageTotals()
+    month_cost, month_currency = None, None
+    month_goal = None
+    billing = None
+    billing_cost, billing_currency = None, None
+    billing_goal = None
+    if has_billing:
+        billing = _fetch_billing_usage(client, sc, billing_during, today)
+        billing_cost, billing_currency = _fetch_billing_cost(
+            client, sc, billing_during, today
+        )
+        billing_goal = _fetch_billing_goal(client, sc, billing_during, today)
+    else:
+        month = _fetch_usage(client, sc, "month", month_during)
+        month_cost, month_currency = _sum_cost(client, sc, "month", month_during)
+        month_goal = _sum_goal_gallons(client, sc, "month", month_during)
 
     day_cost, day_currency = _sum_cost(client, sc, "day", day_during)
     week_cost, week_currency = _sum_cost(client, sc, "week", week_during)
-    month_cost, month_currency = _sum_cost(client, sc, "month", month_during)
-    billing_cost, billing_currency = _fetch_billing_cost(
-        client, sc, billing_during, today
-    )
     cost_currency = (
         day_currency or week_currency or month_currency or billing_currency
     )
-
-    day_goal = _sum_goal_gallons(client, sc, "day", day_during)
-    week_goal = _sum_goal_gallons(client, sc, "week", week_during)
-    month_goal = _sum_goal_gallons(client, sc, "month", month_during)
-    billing_goal = _fetch_billing_goal(client, sc, billing_during, today)
 
     open_leak: Leak | None = None
     if sc.leaks:
@@ -521,20 +522,17 @@ def _fetch_meter_snapshot(
         completeness_30d=stats.completeness_30d if stats else None,
         completeness_90d=stats.completeness_90d if stats else None,
         day_gallons=day.gallons,
-        yesterday_gallons=yesterday_usage.gallons,
         week_gallons=week.gallons,
         month_gallons=month.gallons,
         day_during=day.during,
-        yesterday_during=yesterday_usage.during,
         week_during=week.during,
         month_during=month.during,
         day_cost=day_cost,
         week_cost=week_cost,
         month_cost=month_cost,
         cost_currency=cost_currency,
-        day_goal_gallons=day_goal,
-        week_goal_gallons=week_goal,
         month_goal_gallons=month_goal,
+        has_billing=has_billing,
         has_open_leak=open_leak is not None,
         open_leak_id=open_leak.id if open_leak else None,
         open_leak_started_at=open_leak.started_at if open_leak else None,
