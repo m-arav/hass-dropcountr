@@ -11,6 +11,7 @@ Per meter (service connection):
 | Entity | Description |
 |--------|-------------|
 | **Total usage** | Synthetic running total (`total_increasing`) built by summing **reported** hourly gallons. Add this under **Energy → Water consumption**. History is backfilled for the last 30 days, then caught up each poll. Hours with `null` gallons are omitted (gaps, not zeros). This is not the physical meter index. |
+| **Total cost** | Synthetic running total of Dropcountr’s hourly estimated **cost**. That figure is whatever the API billed for the hour — usage tiers **and** amortized static/fixed charges — not a flat `$ / gal`. In Energy → Water, set **Use an entity tracking the total costs** to this sensor. Same 30-day backfill and catch-up as Total usage. |
 | Today / week **usage** | Gallons in the **premise timezone**. Attributes include the server-aligned `during`, `during_start`, and `during_end` (local wall clock with the real offset, not the API's false UTC `Z`). |
 | Month **or** billing **usage** | Billing cycle when the meter has `billing_period`; otherwise calendar month. Never both. |
 | **Last reported hour** | Latest hourly bucket in yesterday–today whose gallons are not `null`. |

@@ -49,6 +49,16 @@ class HourlyPoint:
 
 
 @dataclass(frozen=True)
+class HourlyCostPoint:
+    """One hourly cost bucket from ``cost_series``."""
+
+    start: datetime
+    price: float
+    currency: str | None
+    during: str | None
+
+
+@dataclass(frozen=True)
 class MeterSnapshot:
     """Polled state for one service connection (meter)."""
 
@@ -98,7 +108,9 @@ class MeterSnapshot:
     billing_cost: float | None = None
     billing_goal_gallons: float | None = None
     hourly_points: tuple[HourlyPoint, ...] = ()
+    hourly_cost_points: tuple[HourlyCostPoint, ...] = ()
     lifetime_gallons: float | None = None
+    lifetime_cost: float | None = None
 
 
 def _local_today(tz_name: str | None) -> date:
@@ -306,10 +318,45 @@ def _fetch_hourly_points(
     return _hourly_points_from_members(list(series.members))
 
 
-def fetch_hourly_points_for_meter(
+def _hourly_cost_from_members(members: list) -> list[HourlyCostPoint]:
+    points: list[HourlyCostPoint] = []
+    for point in members:
+        start = _interval_start(point.during)
+        if start is None or start.tzinfo is None:
+            continue
+        points.append(
+            HourlyCostPoint(
+                start=_hour_start(start),
+                price=point.price,
+                currency=point.price_currency,
+                during=point.during,
+            )
+        )
+    points.sort(key=lambda item: item.start)
+    return points
+
+
+def _fetch_hourly_cost_points(
+    client: DropcountrClient, sc: ServiceConnection, during: str
+) -> list[HourlyCostPoint]:
+    if not sc.cost_series:
+        return []
+    try:
+        series = client.cost(sc, period="hour", during=during)
+    except Exception:
+        _LOGGER.debug(
+            "Dropcountr hourly cost failed for %s",
+            sc.meter_id or sc.id,
+            exc_info=True,
+        )
+        return []
+    return _hourly_cost_from_members(list(series.members))
+
+
+def fetch_hourly_backfill_for_meter(
     email: str, password: str, meter_id: str, during: str
-) -> list[HourlyPoint]:
-    """Login and fetch reported hourly buckets for one meter."""
+) -> tuple[list[HourlyPoint], list[HourlyCostPoint]]:
+    """Login and fetch 30-day hourly usage and cost for one meter."""
     client = DropcountrClient(email=email, password=password)
     try:
         login = client.login()
@@ -320,8 +367,11 @@ def fetch_hourly_points_for_meter(
             premise = client.premise(premise_ref.id)
             for sc in premise.service_connections:
                 if (sc.meter_id or sc.id) == meter_id:
-                    return _fetch_hourly_points(client, sc, during)
-        return []
+                    return (
+                        _fetch_hourly_points(client, sc, during),
+                        _fetch_hourly_cost_points(client, sc, during),
+                    )
+        return [], []
     finally:
         try:
             client.logout()
@@ -506,9 +556,9 @@ def _fetch_meter_snapshot(
 
     day = _fetch_usage(client, sc, "day", day_during)
     week = _fetch_usage(client, sc, "week", week_during)
-    hourly_points = _fetch_hourly_points(
-        client, sc, _exclusive_yesterday_and_today(today)
-    )
+    recent_during = _exclusive_yesterday_and_today(today)
+    hourly_points = _fetch_hourly_points(client, sc, recent_during)
+    hourly_cost_points = _fetch_hourly_cost_points(client, sc, recent_during)
     latest_hour = hourly_points[-1] if hourly_points else None
 
     month = UsageTotals()
@@ -531,7 +581,11 @@ def _fetch_meter_snapshot(
     day_cost, day_currency = _sum_cost(client, sc, "day", day_during)
     week_cost, week_currency = _sum_cost(client, sc, "week", week_during)
     cost_currency = (
-        day_currency or week_currency or month_currency or billing_currency
+        day_currency
+        or week_currency
+        or month_currency
+        or billing_currency
+        or (hourly_cost_points[0].currency if hourly_cost_points else None)
     )
 
     open_leak: Leak | None = None
@@ -605,6 +659,7 @@ def _fetch_meter_snapshot(
         ),
         hour_during=latest_hour.during if latest_hour else None,
         hourly_points=tuple(hourly_points),
+        hourly_cost_points=tuple(hourly_cost_points),
         day_irrigation_gallons=day.irrigation_gallons,
         day_irrigation_events=day.irrigation_events,
         week_irrigation_gallons=week.irrigation_gallons,

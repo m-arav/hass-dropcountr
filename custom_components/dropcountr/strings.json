@@ -47,6 +47,7 @@
   "entity": {
     "sensor": {
       "total_usage": { "name": "Total usage" },
+      "total_cost": { "name": "Total cost" },
       "day_usage": { "name": "Today usage" },
       "week_usage": { "name": "Week usage" },
       "month_usage": { "name": "Month usage" },

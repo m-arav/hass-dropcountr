@@ -36,6 +36,7 @@ from .const import (
     ATTR_SERVICE_TYPE,
     ATTR_WEEK_COST,
     DOMAIN,
+    TOTAL_COST_KEY,
     TOTAL_USAGE_KEY,
 )
 from .coordinator import (
@@ -108,6 +109,16 @@ SENSORS: tuple[DropcountrSensorEntityDescription, ...] = (
         suggested_display_precision=1,
         value_fn=lambda data: data.lifetime_gallons,
         available_fn=lambda data: data.lifetime_gallons is not None,
+    ),
+    DropcountrSensorEntityDescription(
+        key=TOTAL_COST_KEY,
+        translation_key=TOTAL_COST_KEY,
+        icon="mdi:currency-usd",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.lifetime_cost,
+        available_fn=lambda data: data.lifetime_cost is not None,
     ),
     DropcountrSensorEntityDescription(
         key="day_usage",
